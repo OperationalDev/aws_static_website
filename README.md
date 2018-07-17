@@ -14,7 +14,7 @@ This Terraform Module creates a static website using Amazon Route53 for DNS, Ama
 ## Inputs
 - see variables.tf
 
-##
+## Outputs
 - none
 
 ## Example

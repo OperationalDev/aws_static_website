@@ -1,5 +1,5 @@
 data "aws_route53_zone" "primary" {
-  name         = "${var.website_root_domain}"
+  name = "${var.website_root_domain}"
 }
 
 resource "aws_acm_certificate" "cert" {
@@ -13,10 +13,35 @@ resource "aws_acm_certificate" "cert" {
 
 }
 
+resource "aws_route53_record" "cert_validation-cn" {
+  name = "${aws_acm_certificate.cert.domain_validation_options.0.resource_record_name}"
+  type = "${aws_acm_certificate.cert.domain_validation_options.0.resource_record_type}"
+  zone_id = "${data.aws_route53_zone.primary.id}"
+  records = ["${aws_acm_certificate.cert.domain_validation_options.0.resource_record_value}"]
+  ttl = 60
+}
+
+resource "aws_route53_record" "cert_validation-www" {
+  name = "${aws_acm_certificate.cert.domain_validation_options.1.resource_record_name}"
+  type = "${aws_acm_certificate.cert.domain_validation_options.1.resource_record_type}"
+  zone_id = "${data.aws_route53_zone.primary.id}"
+  records = ["${aws_acm_certificate.cert.domain_validation_options.1.resource_record_value}"]
+  ttl = 60
+}
+
+resource "aws_acm_certificate_validation" "cert" {
+  certificate_arn = "${aws_acm_certificate.cert.arn}"
+  validation_record_fqdns = ["${aws_route53_record.cert_validation-cn.fqdn}","${aws_route53_record.cert_validation-www.fqdn}"]
+}
+
 resource "aws_s3_bucket" "website_bucket_cloud_front" {
   bucket = "${var.prefix}-${var.website_name}"
-  acl    = "private"
+  acl    = "public-read"
 
+  website {
+    index_document = "index.html"
+    error_document = "404.html"
+  }
   tags {
     Name = "${var.prefix}_${var.website_name}_website_bucket"
     Owner = "${var.website_owner}"
@@ -60,12 +85,18 @@ resource "aws_cloudfront_origin_access_identity" "website_cf_identity" {
 
 resource "aws_cloudfront_distribution" "websitecf_s3_distribution" {
   origin {
-    domain_name = "${var.prefix}-${var.website_name}.s3.us-east-1.amazonaws.com"
-    origin_id   = "myS3Origin"
+    domain_name = "${var.prefix}-${var.website_name}.s3-website-us-east-1.amazonaws.com"
+    origin_id   = "S3-Website-${var.prefix}-${var.website_name}.s3-website-us-east-1.amazonaws.com"
 
-    s3_origin_config {
-      origin_access_identity = "${aws_cloudfront_origin_access_identity.website_cf_identity.cloudfront_access_identity_path}"
+    custom_origin_config {
+      http_port = 80
+      https_port = 443
+      origin_ssl_protocols = ["TLSv1","TLSv1.1","TLSv1.2"]
+      origin_protocol_policy = "http-only"
     }
+#    s3_origin_config {
+#      origin_access_identity = "${aws_cloudfront_origin_access_identity.website_cf_identity.cloudfront_access_identity_path}"
+#    }
   }
 
   enabled             = true
@@ -83,7 +114,7 @@ resource "aws_cloudfront_distribution" "websitecf_s3_distribution" {
   default_cache_behavior {
     allowed_methods  = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods   = ["GET", "HEAD"]
-    target_origin_id = "myS3Origin"
+    target_origin_id = "S3-Website-${var.prefix}-${var.website_name}.s3-website-us-east-1.amazonaws.com"
 
     forwarded_values {
       query_string = false
@@ -93,7 +124,7 @@ resource "aws_cloudfront_distribution" "websitecf_s3_distribution" {
       }
     }
 
-    viewer_protocol_policy = "allow-all"
+    viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
     default_ttl            = 3600
     max_ttl                = 86400
@@ -122,9 +153,12 @@ resource "aws_cloudfront_distribution" "websitecf_s3_distribution" {
 resource "aws_route53_record" "dns" {
   zone_id = "${data.aws_route53_zone.primary.zone_id}"
   name    = "${var.website_url}"
-  type    = "CNAME"
-  ttl     = "300"
-  records = ["${aws_cloudfront_distribution.websitecf_s3_distribution.domain_name}"]
+  type    = "A"
+  alias {
+    name                   = "${aws_cloudfront_distribution.websitecf_s3_distribution.domain_name}"
+    zone_id = "${aws_cloudfront_distribution.websitecf_s3_distribution.hosted_zone_id}"
+    evaluate_target_health = false
+  }
 }
 
 resource "aws_route53_record" "dns-www" {
@@ -133,17 +167,4 @@ resource "aws_route53_record" "dns-www" {
   type    = "CNAME"
   ttl     = "300"
   records = ["${aws_cloudfront_distribution.websitecf_s3_distribution.domain_name}"]
-}
-
-resource "aws_route53_record" "cert_validation" {
-  name = "${aws_acm_certificate.cert.domain_validation_options.0.resource_record_name}"
-  type = "${aws_acm_certificate.cert.domain_validation_options.0.resource_record_type}"
-  zone_id = "${data.aws_route53_zone.primary.id}"
-  records = ["${aws_acm_certificate.cert.domain_validation_options.0.resource_record_value}"]
-  ttl = 60
-}
-
-resource "aws_acm_certificate_validation" "cert" {
-  certificate_arn = "${aws_acm_certificate.cert.arn}"
-  validation_record_fqdns = ["${aws_route53_record.cert_validation.fqdn}"]
 }
